@@ -510,6 +510,11 @@ function HumanMatching({
   const [queuePosition, setQueuePosition] = useState(0);
   const [totalInQueue, setTotalInQueue] = useState(0);
   const [location, setLocation] = useState('Global');
+  const [globalStats, setGlobalStats] = useState({
+    queueLength: 0,
+    totalOnline: 0,
+    timestamp: 0
+  });
 
   useEffect(() => {
     // Connect to socket when component mounts
@@ -528,6 +533,11 @@ function HumanMatching({
 
     socketService.onQueueLeft(() => {
       setIsInQueue(false);
+    });
+
+    // Listen for global queue status updates
+    socketService.onGlobalQueueStatus((data) => {
+      setGlobalStats(data);
     });
 
     return () => {
@@ -555,6 +565,23 @@ function HumanMatching({
         <p className="text-lg text-gray-600">
           Connect with real people for authentic conversations
         </p>
+        
+        {/* Real-time Statistics */}
+        <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-600">{globalStats.totalOnline}</div>
+              <div className="text-gray-600">Online Now</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-purple-600">{globalStats.queueLength}</div>
+              <div className="text-gray-600">In Queue</div>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-gray-500">
+            Updated {globalStats.timestamp ? new Date(globalStats.timestamp).toLocaleTimeString() : 'Loading...'}
+          </div>
+        </div>
       </div>
 
       {!isInQueue ? (
@@ -601,8 +628,11 @@ function HumanMatching({
               <h3 className="text-xl font-semibold text-gray-900 mb-2">
                 Looking for a partner...
               </h3>
-              <p className="text-gray-600 mb-4">
+              <p className="text-gray-600 mb-2">
                 Position in queue: <span className="font-bold text-blue-600">{queuePosition}</span> of {totalInQueue}
+              </p>
+              <p className="text-sm text-gray-500 mb-4">
+                Location: <span className="font-medium text-gray-700">{location}</span>
               </p>
               <p className="text-sm text-gray-500">
                 We'll match you with someone as soon as possible!
