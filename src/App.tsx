@@ -48,6 +48,7 @@ type Conversation = {
   messages: Message[];
   compliments?: { person1: string; stranger: string };
   votes?: { p1: number; p2: number };
+  chatMode?: "ai" | "human";
 };
 
 // --- OpenAI Configuration ---
@@ -148,7 +149,7 @@ function useLocalStore<T>(key: string, initial: T) {
 
 // --- App Shell ---
 export default function App() {
-  const [route, setRoute] = useState<"home" | "chat" | "vote" | "stats">(
+  const [route, setRoute] = useState<"home" | "chat-mode" | "chat" | "vote" | "stats">(
     "home"
   );
   const [convos, setConvos] = useLocalStore<Conversation[]>(STORAGE_KEY, []);
@@ -160,11 +161,12 @@ export default function App() {
   );
 
   const goHome = () => setRoute("home");
-  const startChat = () => {
+  const startChat = (mode: "ai" | "human") => {
     const convo: Conversation = {
       id: uid(),
       createdAt: Date.now(),
       messages: [],
+      chatMode: mode,
     };
     setConvos((prev) => [convo, ...prev]);
     setActiveId(convo.id);
@@ -179,40 +181,45 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <nav className="sticky top-0 z-20 bg-white/80 backdrop-blur border-b">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-4">
-          <button
-            onClick={() => setRoute("home")}
-            className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
-              route === "home"
-                ? "bg-blue-600 text-white border-blue-500 shadow-lg"
-                : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            Home
-          </button>
-          <button
-            onClick={startChat}
-            className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
-              route === "chat"
-                ? "bg-blue-600 text-white border-blue-500 shadow-lg"
-                : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            Chat
-          </button>
-          <button
-            onClick={() => setRoute("vote")}
-            className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
-              route === "vote"
-                ? "bg-blue-600 text-white border-blue-500 shadow-lg"
-                : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
-            }`}
-          >
-            Vote
-          </button>
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+          {/* Left Center Navigation */}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setRoute("home")}
+              className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
+                route === "home"
+                  ? "bg-blue-600 text-white border-blue-500 shadow-lg"
+                  : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              Home
+            </button>
+            <button
+              onClick={() => setRoute("chat-mode")}
+              className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
+                route === "chat" || route === "chat-mode"
+                  ? "bg-blue-600 text-white border-blue-500 shadow-lg"
+                  : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              Chat
+            </button>
+            <button
+              onClick={() => setRoute("vote")}
+              className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
+                route === "vote"
+                  ? "bg-blue-600 text-white border-blue-500 shadow-lg"
+                  : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
+              }`}
+            >
+              Vote
+            </button>
+          </div>
+          
+          {/* Right Navigation */}
           <button
             onClick={() => setRoute("stats")}
-            className={`ml-auto px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
+            className={`px-6 py-3 rounded-xl text-base font-semibold transition-all duration-200 border-2 ${
               route === "stats"
                 ? "bg-blue-600 text-white border-blue-500 shadow-lg"
                 : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 border-gray-300 hover:border-gray-400"
@@ -225,7 +232,10 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto p-4">
         {route === "home" && (
-          <Home onStart={startChat} onVote={() => setRoute("vote")} />
+          <Home onStart={() => setRoute("chat-mode")} onVote={() => setRoute("vote")} />
+        )}
+        {route === "chat-mode" && (
+          <ChatModeSelection onSelectMode={startChat} onBack={goHome} />
         )}
         {route === "chat" && activeConvo && (
           <Chat
@@ -240,7 +250,7 @@ export default function App() {
           <Vote
             convos={convos}
             setConvos={setConvos}
-            onStartNew={startChat}
+            onStartNew={() => setRoute("chat-mode")}
             onHome={goHome}
           />
         )}
@@ -250,6 +260,67 @@ export default function App() {
       <footer className="py-6 text-center text-xs text-gray-500">
         © {new Date().getFullYear()} Compliment Chat • Demo
       </footer>
+    </div>
+  );
+}
+
+// --- Components ---
+function CyclingText() {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [displayText, setDisplayText] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [charIndex, setCharIndex] = useState(0);
+  
+  const textPairs = [
+    { first: "Connect", rest: " with strangers." },
+    { first: "Share", rest: " genuine compliments." },
+    { first: "Discover", rest: " what makes conversations meaningful." },
+    { first: "Spread", rest: " kindness and make people's days." }
+  ];
+
+  const currentText = textPairs[currentIndex];
+  const fullText = currentText.first + currentText.rest;
+  const typingSpeed = 100;
+  const deletingSpeed = 50;
+  const pauseTime = 2000;
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (!isDeleting && charIndex < fullText.length) {
+        // Typing
+        setDisplayText(fullText.substring(0, charIndex + 1));
+        setCharIndex(charIndex + 1);
+      } else if (isDeleting && charIndex > 0) {
+        // Deleting
+        setDisplayText(fullText.substring(0, charIndex - 1));
+        setCharIndex(charIndex - 1);
+      } else if (!isDeleting && charIndex === fullText.length) {
+        // Finished typing, pause then start deleting
+        setTimeout(() => setIsDeleting(true), pauseTime);
+      } else if (isDeleting && charIndex === 0) {
+        // Finished deleting, move to next text
+        setIsDeleting(false);
+        setCurrentIndex((prev) => (prev + 1) % textPairs.length);
+      }
+    }, isDeleting ? deletingSpeed : typingSpeed);
+
+    return () => clearTimeout(timeout);
+  }, [charIndex, isDeleting, fullText, currentIndex, textPairs.length]);
+
+  // Determine which part of the text is currently displayed
+  const isFirstWord = charIndex <= currentText.first.length;
+  const displayedFirst = isFirstWord ? displayText : currentText.first;
+  const displayedRest = isFirstWord ? "" : displayText.substring(currentText.first.length);
+
+  return (
+    <div className="text-left whitespace-nowrap overflow-hidden">
+      <span className="text-4xl font-bold text-blue-600">
+        {displayedFirst}
+      </span>
+      <span className="text-4xl font-bold text-gray-900">
+        {displayedRest}
+      </span>
+      <span className="text-4xl font-bold text-gray-900 animate-pulse">|</span>
     </div>
   );
 }
@@ -271,19 +342,18 @@ function Home({
       {/* Hero Section */}
       <div
         ref={heroRef}
-        className={`text-center py-12 transition-all duration-1000 ${
+        className={`py-12 transition-all duration-1000 ${
           isHeroVisible
             ? "opacity-100 translate-y-0"
             : "opacity-0 translate-y-8"
         }`}
       >
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">
+        <h1 className="text-4xl font-bold text-gray-900 mb-8 text-left">
           Welcome to Compliment Chat
         </h1>
-        <p className="text-lg text-gray-600 max-w-2xl mx-auto leading-relaxed">
-          Connect with strangers, share genuine compliments, and discover what
-          makes conversations meaningful.
-        </p>
+        <div className="text-left">
+          <CyclingText />
+        </div>
       </div>
 
       {/* Action Buttons */}
@@ -297,19 +367,19 @@ function Home({
       >
         <button
           onClick={onStart}
-          className="px-12 py-6 rounded-2xl bg-gray-900 text-white hover:opacity-90 text-xl font-bold transition-all duration-200 hover:scale-105 shadow-xl border-2 border-gray-700"
+          className="px-12 py-6 rounded-2xl bg-gray-900 text-white hover:opacity-90 text-xl font-bold transition-all duration-300 hover:scale-105 hover:-translate-y-1 shadow-xl border-2 border-gray-700"
         >
           Start 1-minute Chat
         </button>
         <button
           onClick={onVote}
-          className="px-12 py-6 rounded-2xl bg-gray-100 hover:bg-gray-200 text-xl font-bold transition-all duration-200 hover:scale-105 shadow-xl border-2 border-gray-300 hover:border-gray-400"
+          className="px-12 py-6 rounded-2xl bg-gray-100 hover:bg-gray-200 text-xl font-bold transition-all duration-300 hover:scale-105 hover:-translate-y-1 shadow-xl border-2 border-gray-300 hover:border-gray-400"
         >
           Go to Voting
         </button>
       </div>
 
-      {/* Description Section */}
+      {/* How it Works & Example Section */}
       <div
         ref={descriptionRef}
         className={`transition-all duration-1000 delay-400 ${
@@ -318,46 +388,38 @@ function Home({
             : "opacity-0 translate-y-8"
         }`}
       >
-        <div className="text-center space-y-6">
-          <h2 className="text-5xl font-bold text-gray-800 mb-8">
-            How it works
-          </h2>
-          <div className="space-y-8 max-w-4xl mx-auto">
-            <p className="text-2xl text-gray-700 leading-relaxed">
-              Tap <span className="font-bold text-blue-600">Chat</span> to
-              start a 60-second conversation with an AI-powered stranger.
-            </p>
-            <p className="text-2xl text-gray-700 leading-relaxed">
-              When time runs out, you'll enter a compliment about your
-              conversation partner.
-            </p>
-            <p className="text-2xl text-gray-700 leading-relaxed">
-              Head to <span className="font-bold text-blue-600">Vote</span>{" "}
-              to see compliments and pick which one you like better.
-            </p>
-            <p className="text-2xl text-gray-700 leading-relaxed">
-              See live percentages and check{" "}
-              <span className="font-bold text-blue-600">My Stats</span> to
-              track your performance.
-            </p>
+        <div className="grid lg:grid-cols-2 gap-12 items-start">
+          {/* Left Side - How it Works */}
+          <div className="space-y-6">
+            <h2 className="text-5xl font-bold text-gray-800 mb-8 text-left">
+              How it works
+            </h2>
+            <div className="space-y-8">
+              <p className="text-2xl text-gray-700 leading-relaxed text-left">
+                Tap <span className="font-bold text-blue-600">Chat</span> to
+                start a 60-second conversation with an AI-powered stranger.
+              </p>
+              <p className="text-2xl text-gray-700 leading-relaxed text-left">
+                When time runs out, you'll enter a compliment about your
+                conversation partner.
+              </p>
+              <p className="text-2xl text-gray-700 leading-relaxed text-left">
+                Head to <span className="font-bold text-blue-600">Vote</span>{" "}
+                to see compliments and pick which one you like better.
+              </p>
+              <p className="text-2xl text-gray-700 leading-relaxed text-left">
+                See live percentages and check{" "}
+                <span className="font-bold text-blue-600">My Stats</span> to
+                track your performance.
+              </p>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Example Chat Section */}
-      <div
-        ref={descriptionRef}
-        className={`transition-all duration-1000 delay-600 ${
-          isDescriptionVisible
-            ? "opacity-100 translate-y-0"
-            : "opacity-0 translate-y-8"
-        }`}
-      >
-        <div className="text-center space-y-6">
-          <h2 className="text-3xl font-bold text-gray-800 mb-8">
-            Example Conversation
-          </h2>
-          <div className="max-w-2xl mx-auto">
+          {/* Right Side - Example Conversation */}
+          <div className="space-y-6">
+            <h2 className="text-3xl font-bold text-gray-800 mb-8 text-left">
+              Example Conversation
+            </h2>
             <div className="bg-white rounded-2xl shadow-lg border p-6 space-y-4">
               <div className="flex justify-end">
                 <div className="max-w-[80%] bg-gray-900 text-white rounded-2xl px-4 py-3 text-sm">
@@ -395,6 +457,108 @@ function Home({
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatModeSelection({
+  onSelectMode,
+  onBack,
+}: {
+  onSelectMode: (mode: "ai" | "human") => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="max-w-2xl mx-auto">
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-4">
+          Choose Your Chat Experience
+        </h1>
+        <p className="text-lg text-gray-600">
+          Select how you'd like to connect and share compliments
+        </p>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* AI Chat Option */}
+        <div className="p-6 rounded-2xl bg-white border shadow-sm hover:shadow-md transition-shadow">
+          <div className="text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center">
+              <span className="text-2xl">🤖</span>
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+              Chat with AI
+            </h3>
+            <p className="text-gray-600 mb-4">
+              Practice conversations with our friendly AI. Perfect for trying out compliments and getting comfortable with the format.
+            </p>
+            <div className="space-y-2 text-sm text-gray-500 mb-6">
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span>Always available</span>
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                <span>AI-generated responses</span>
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                <span>Practice mode</span>
+              </div>
+            </div>
+            <button
+              onClick={() => onSelectMode("ai")}
+              className="w-full px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium hover:from-blue-700 hover:to-purple-700 transition-all duration-200 hover:scale-105"
+            >
+              Start AI Chat
+            </button>
+          </div>
+        </div>
+
+        {/* Human Chat Option */}
+        <div className="p-6 rounded-2xl bg-white border shadow-sm hover:shadow-md transition-shadow">
+          <div className="text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-r from-green-500 to-teal-600 flex items-center justify-center">
+              <span className="text-2xl">👥</span>
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+              Connect with Humans
+            </h3>
+            <p className="text-gray-600 mb-4">
+              Chat with real people who are also looking to share genuine compliments. Experience authentic human connection.
+            </p>
+            <div className="space-y-2 text-sm text-gray-500 mb-6">
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+                <span>May need to wait for match</span>
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span>Real human responses</span>
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <span className="w-2 h-2 bg-teal-500 rounded-full"></span>
+                <span>Authentic connection</span>
+              </div>
+            </div>
+            <button
+              onClick={() => onSelectMode("human")}
+              className="w-full px-6 py-3 rounded-xl bg-gradient-to-r from-green-600 to-teal-600 text-white font-medium hover:from-green-700 hover:to-teal-700 transition-all duration-200 hover:scale-105"
+            >
+              Connect with Human
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-center mt-8">
+        <button
+          onClick={onBack}
+          className="px-6 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+        >
+          ← Back to Home
+        </button>
       </div>
     </div>
   );
@@ -439,22 +603,52 @@ function Chat({
     updateConvo(updatedConvo);
     setInput("");
 
-    // If user sends a message, generate bot response
+    // If user sends a message, generate response based on chat mode
     if (author === "You") {
-      try {
-        const botResponse = await generateBotResponse(updatedConvo.messages);
-        const botMessage: Message = {
-          id: uid(),
-          author: "Stranger",
-          text: botResponse,
-          ts: Date.now(),
-        };
-        updateConvo({
-          ...updatedConvo,
-          messages: [...updatedConvo.messages, botMessage],
-        });
-      } catch (error) {
-        console.error("Error generating bot response:", error);
+      if (convo.chatMode === "ai") {
+        // AI mode: generate bot response
+        try {
+          const botResponse = await generateBotResponse(updatedConvo.messages);
+          const botMessage: Message = {
+            id: uid(),
+            author: "Stranger",
+            text: botResponse,
+            ts: Date.now(),
+          };
+          updateConvo({
+            ...updatedConvo,
+            messages: [...updatedConvo.messages, botMessage],
+          });
+        } catch (error) {
+          console.error("Error generating bot response:", error);
+        }
+      } else {
+        // Human mode: simulate waiting for human response
+        setTimeout(() => {
+          const humanResponses = [
+            "That's really interesting! Tell me more about that.",
+            "I love your perspective on this!",
+            "You seem like such a thoughtful person.",
+            "That sounds amazing! I'd love to hear more.",
+            "You have such a positive way of looking at things!",
+            "I'm really enjoying our conversation!",
+            "That's such a cool experience!",
+            "You seem like a really genuine person.",
+            "I love how you express yourself!",
+            "That's wonderful to hear!",
+          ];
+          const randomResponse = humanResponses[Math.floor(Math.random() * humanResponses.length)];
+          const humanMessage: Message = {
+            id: uid(),
+            author: "Stranger",
+            text: randomResponse,
+            ts: Date.now(),
+          };
+          updateConvo({
+            ...updatedConvo,
+            messages: [...updatedConvo.messages, humanMessage],
+          });
+        }, 1000 + Math.random() * 2000); // 1-3 second delay to simulate human typing
       }
     }
   };
@@ -463,28 +657,57 @@ function Chat({
     const trimmedP1 = p1.trim();
     if (!trimmedP1) return;
     
-    try {
-      // Generate stranger's compliment
-      const strangerCompliment = await generateStrangerCompliment(convo.messages);
+    if (convo.chatMode === "ai") {
+      // AI mode: generate AI compliment
+      try {
+        const strangerCompliment = await generateStrangerCompliment(convo.messages);
+        
+        const updated: Conversation = {
+          ...convo,
+          compliments: { 
+            person1: trimmedP1,
+            stranger: strangerCompliment
+          },
+          votes: convo.votes ?? { p1: 0, p2: 0 },
+        };
+        updateConvo(updated);
+        onFinish();
+      } catch (error) {
+        console.error("Error generating AI compliment:", error);
+        // Fallback if AI fails
+        const updated: Conversation = {
+          ...convo,
+          compliments: { 
+            person1: trimmedP1,
+            stranger: "You have such a positive energy that really brightened our conversation!"
+          },
+          votes: convo.votes ?? { p1: 0, p2: 0 },
+        };
+        updateConvo(updated);
+        onFinish();
+      }
+    } else {
+      // Human mode: use pre-written human compliments
+      const humanCompliments = [
+        "You have such a wonderful way of expressing yourself!",
+        "Your positive energy really made this conversation so enjoyable!",
+        "You're such a thoughtful and genuine person!",
+        "I love how you share your experiences so openly!",
+        "You have such an interesting perspective on things!",
+        "Your kindness really shines through in everything you say!",
+        "You're such a great conversationalist!",
+        "I really enjoyed getting to know you through our chat!",
+        "You have such a warm and welcoming personality!",
+        "Thank you for such a meaningful conversation!"
+      ];
+      
+      const randomCompliment = humanCompliments[Math.floor(Math.random() * humanCompliments.length)];
       
       const updated: Conversation = {
         ...convo,
         compliments: { 
           person1: trimmedP1,
-          stranger: strangerCompliment
-        },
-        votes: convo.votes ?? { p1: 0, p2: 0 },
-      };
-      updateConvo(updated);
-      onFinish();
-    } catch (error) {
-      console.error("Error generating stranger compliment:", error);
-      // Fallback if AI fails
-      const updated: Conversation = {
-        ...convo,
-        compliments: { 
-          person1: trimmedP1,
-          stranger: "You have such a positive energy that really brightened our conversation!"
+          stranger: randomCompliment
         },
         votes: convo.votes ?? { p1: 0, p2: 0 },
       };
@@ -497,10 +720,30 @@ function Chat({
     <div className="grid gap-4 md:grid-cols-3 h-[calc(100vh-180px)]">
       <div className="md:col-span-2 rounded-2xl bg-white shadow-sm border flex flex-col h-full overflow-hidden">
         <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-50 to-purple-50">
-          <h2 className="text-lg font-semibold">Live Chat</h2>
-          <span className="text-sm px-3 py-1 rounded-full bg-white shadow-sm">
-            {fmtTime(secondsLeft)}
-          </span>
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold">Live Chat</h2>
+            <div className={`px-3 py-1 rounded-full text-xs font-medium ${
+              convo.chatMode === "ai" 
+                ? "bg-blue-100 text-blue-700" 
+                : "bg-green-100 text-green-700"
+            }`}>
+              {convo.chatMode === "ai" ? "🤖 AI Mode" : "👥 Human Mode"}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                const newMode = convo.chatMode === "ai" ? "human" : "ai";
+                updateConvo({ ...convo, chatMode: newMode });
+              }}
+              className="px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-xs font-medium transition-colors"
+            >
+              Switch to {convo.chatMode === "ai" ? "Human" : "AI"}
+            </button>
+            <span className="text-sm px-3 py-1 rounded-full bg-white shadow-sm">
+              {fmtTime(secondsLeft)}
+            </span>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto space-y-4 p-4 bg-gradient-to-b from-white to-gray-50">
           {convo.messages.map((m) => (
