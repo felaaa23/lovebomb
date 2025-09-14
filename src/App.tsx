@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import OpenAI from "openai";
+import { socketService } from "./socketService";
 
 // Custom hook for scroll-triggered animations
 function useScrollAnimation() {
@@ -49,6 +50,21 @@ type Conversation = {
   compliments?: { person1: string; stranger: string };
   votes?: { p1: number; p2: number };
   chatMode?: "ai" | "human";
+};
+
+type MatchData = {
+  roomId: string;
+  partnerId: string;
+  startTime: number;
+  duration: number;
+};
+
+type VotingPair = {
+  id: string;
+  messages: Array<{ userId: string; message: string; timestamp: number }>;
+  compliments: Record<string, string>;
+  timestamp: number;
+  votes?: { choice1: number; choice2: number };
 };
 
 // --- OpenAI Configuration ---
@@ -149,11 +165,12 @@ function useLocalStore<T>(key: string, initial: T) {
 
 // --- App Shell ---
 export default function App() {
-  const [route, setRoute] = useState<"home" | "chat-mode" | "chat" | "vote" | "stats">(
+  const [route, setRoute] = useState<"home" | "chat-mode" | "human-matching" | "chat" | "vote" | "stats">(
     "home"
   );
   const [convos, setConvos] = useLocalStore<Conversation[]>(STORAGE_KEY, []);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [, setMatchData] = useState<MatchData | null>(null);
 
   const activeConvo = useMemo(
     () => convos.find((c) => c.id === activeId) || null,
@@ -161,17 +178,36 @@ export default function App() {
   );
 
   const goHome = () => setRoute("home");
+  
   const startChat = (mode: "ai" | "human") => {
+    if (mode === "human") {
+      setRoute("human-matching");
+    } else {
+      const convo: Conversation = {
+        id: uid(),
+        createdAt: Date.now(),
+        messages: [],
+        chatMode: mode,
+      };
+      setConvos((prev) => [convo, ...prev]);
+      setActiveId(convo.id);
+      setRoute("chat");
+    }
+  };
+
+  const handleMatched = (matchData: MatchData) => {
+    setMatchData(matchData);
     const convo: Conversation = {
-      id: uid(),
-      createdAt: Date.now(),
+      id: matchData.roomId,
+      createdAt: matchData.startTime,
       messages: [],
-      chatMode: mode,
+      chatMode: "human",
     };
     setConvos((prev) => [convo, ...prev]);
     setActiveId(convo.id);
     setRoute("chat");
   };
+
 
   const goVote = (id?: string) => {
     if (id) setActiveId(id);
@@ -237,6 +273,9 @@ export default function App() {
         {route === "chat-mode" && (
           <ChatModeSelection onSelectMode={startChat} onBack={goHome} />
         )}
+        {route === "human-matching" && (
+          <HumanMatching onMatched={handleMatched} onBack={() => setRoute("chat-mode")} />
+        )}
         {route === "chat" && activeConvo && (
           <Chat
             convo={activeConvo}
@@ -248,8 +287,6 @@ export default function App() {
         )}
         {route === "vote" && (
           <Vote
-            convos={convos}
-            setConvos={setConvos}
             onStartNew={() => setRoute("chat-mode")}
             onHome={goHome}
           />
@@ -462,6 +499,140 @@ function Home({
   );
 }
 
+function HumanMatching({
+  onMatched,
+  onBack,
+}: {
+  onMatched: (matchData: MatchData) => void;
+  onBack: () => void;
+}) {
+  const [isInQueue, setIsInQueue] = useState(false);
+  const [queuePosition, setQueuePosition] = useState(0);
+  const [totalInQueue, setTotalInQueue] = useState(0);
+  const [location, setLocation] = useState('Global');
+
+  useEffect(() => {
+    // Connect to socket when component mounts
+    socketService.connect();
+
+    // Set up socket listeners
+    socketService.onQueueStatus((data) => {
+      setQueuePosition(data.position);
+      setTotalInQueue(data.total);
+    });
+
+    socketService.onMatched((matchData) => {
+      setIsInQueue(false);
+      onMatched(matchData);
+    });
+
+    socketService.onQueueLeft(() => {
+      setIsInQueue(false);
+    });
+
+    return () => {
+      // Clean up listeners when component unmounts
+      socketService.removeAllListeners();
+    };
+  }, [onMatched]);
+
+  const joinQueue = () => {
+    setIsInQueue(true);
+    socketService.joinQueue(location);
+  };
+
+  const leaveQueue = () => {
+    socketService.leaveQueue();
+    setIsInQueue(false);
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <div className="text-center mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-4">
+          Find a Human Partner
+        </h1>
+        <p className="text-lg text-gray-600">
+          Connect with real people for authentic conversations
+        </p>
+      </div>
+
+      {!isInQueue ? (
+        <div className="space-y-6">
+          <div className="p-6 rounded-2xl bg-white border shadow-sm">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Location (Optional)
+                </label>
+                <select
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="Global">Global</option>
+                  <option value="North America">North America</option>
+                  <option value="Europe">Europe</option>
+                  <option value="Asia">Asia</option>
+                  <option value="South America">South America</option>
+                  <option value="Africa">Africa</option>
+                  <option value="Oceania">Oceania</option>
+                </select>
+              </div>
+              
+              <div className="text-center">
+                <button
+                  onClick={joinQueue}
+                  className="px-8 py-4 rounded-xl bg-gradient-to-r from-green-600 to-teal-600 text-white font-medium hover:from-green-700 hover:to-teal-700 transition-all duration-200 hover:scale-105 text-lg"
+                >
+                  Join Queue
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="p-8 rounded-2xl bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200">
+            <div className="text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Looking for a partner...
+              </h3>
+              <p className="text-gray-600 mb-4">
+                Position in queue: <span className="font-bold text-blue-600">{queuePosition}</span> of {totalInQueue}
+              </p>
+              <p className="text-sm text-gray-500">
+                We'll match you with someone as soon as possible!
+              </p>
+            </div>
+          </div>
+
+          <div className="text-center">
+            <button
+              onClick={leaveQueue}
+              className="px-6 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+            >
+              Leave Queue
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="text-center mt-8">
+        <button
+          onClick={onBack}
+          className="px-6 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium transition-colors"
+        >
+          ← Back to Chat Options
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChatModeSelection({
   onSelectMode,
   onBack,
@@ -591,6 +762,58 @@ function Chat({
 
   useEffect(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }));
 
+  // Socket listeners for human chat mode
+  useEffect(() => {
+    if (convo.chatMode === "human") {
+      // Listen for new messages from other users
+      socketService.onNewMessage((data) => {
+        const message: Message = {
+          id: uid(),
+          author: "Stranger",
+          text: data.message,
+          ts: data.timestamp,
+        };
+        const updatedConvo = { ...convo, messages: [...convo.messages, message] };
+        updateConvo(updatedConvo);
+      });
+
+      // Listen for compliments from other users
+      socketService.onComplimentReceived((data) => {
+        const updatedConvo = {
+          ...convo,
+          compliments: {
+            person1: convo.compliments?.person1 || "",
+            stranger: data.compliment,
+          },
+        };
+        updateConvo(updatedConvo);
+      });
+
+      // Listen for conversation completion
+      socketService.onConversationComplete(() => {
+        onFinish();
+      });
+
+      // Listen for user disconnection
+      socketService.onUserDisconnected(() => {
+        const message: Message = {
+          id: uid(),
+          author: "Stranger",
+          text: "Your conversation partner has left the chat.",
+          ts: Date.now(),
+        };
+        const updatedConvo = { ...convo, messages: [...convo.messages, message] };
+        updateConvo(updatedConvo);
+      });
+    }
+
+    return () => {
+      if (convo.chatMode === "human") {
+        socketService.removeAllListeners();
+      }
+    };
+  }, [convo, updateConvo, onFinish]);
+
   const send = async (author: Message["author"]) => {
     if (!input.trim()) return;
     const m: Message = {
@@ -623,32 +846,8 @@ function Chat({
           console.error("Error generating bot response:", error);
         }
       } else {
-        // Human mode: simulate waiting for human response
-        setTimeout(() => {
-          const humanResponses = [
-            "That's really interesting! Tell me more about that.",
-            "I love your perspective on this!",
-            "You seem like such a thoughtful person.",
-            "That sounds amazing! I'd love to hear more.",
-            "You have such a positive way of looking at things!",
-            "I'm really enjoying our conversation!",
-            "That's such a cool experience!",
-            "You seem like a really genuine person.",
-            "I love how you express yourself!",
-            "That's wonderful to hear!",
-          ];
-          const randomResponse = humanResponses[Math.floor(Math.random() * humanResponses.length)];
-          const humanMessage: Message = {
-            id: uid(),
-            author: "Stranger",
-            text: randomResponse,
-            ts: Date.now(),
-          };
-          updateConvo({
-            ...updatedConvo,
-            messages: [...updatedConvo.messages, humanMessage],
-          });
-        }, 1000 + Math.random() * 2000); // 1-3 second delay to simulate human typing
+        // Human mode: send message via socket
+        socketService.sendMessage(input.trim());
       }
     }
   };
@@ -687,32 +886,19 @@ function Chat({
         onFinish();
       }
     } else {
-      // Human mode: use pre-written human compliments
-      const humanCompliments = [
-        "You have such a wonderful way of expressing yourself!",
-        "Your positive energy really made this conversation so enjoyable!",
-        "You're such a thoughtful and genuine person!",
-        "I love how you share your experiences so openly!",
-        "You have such an interesting perspective on things!",
-        "Your kindness really shines through in everything you say!",
-        "You're such a great conversationalist!",
-        "I really enjoyed getting to know you through our chat!",
-        "You have such a warm and welcoming personality!",
-        "Thank you for such a meaningful conversation!"
-      ];
-      
-      const randomCompliment = humanCompliments[Math.floor(Math.random() * humanCompliments.length)];
+      // Human mode: submit compliment via socket
+      socketService.submitCompliment(trimmedP1);
       
       const updated: Conversation = {
         ...convo,
         compliments: { 
           person1: trimmedP1,
-          stranger: randomCompliment
+          stranger: "" // Will be filled when other user submits their compliment
         },
         votes: convo.votes ?? { p1: 0, p2: 0 },
       };
       updateConvo(updated);
-      onFinish();
+      // Note: onFinish will be called when both compliments are received via socket
     }
   };
 
@@ -875,67 +1061,85 @@ function Chat({
 }
 
 function Vote({
-  convos,
-  setConvos,
   onStartNew,
   onHome,
 }: {
-  convos: Conversation[];
-  setConvos: React.Dispatch<React.SetStateAction<Conversation[]>>;
   onStartNew: () => void;
   onHome: () => void;
 }) {
-  const options = convos.filter((c) => c.compliments);
-  
-  // Select 2 random compliments for voting
-  const [randomCompliments, setRandomCompliments] = useState<{
-    compliment1: { text: string; id: string };
-    compliment2: { text: string; id: string };
+  const [votingPairs, setVotingPairs] = useState<VotingPair[]>([]);
+  const [currentPair, setCurrentPair] = useState<VotingPair | null>(null);
+  const [hasVoted, setHasVoted] = useState(false);
+  const [voteResults, setVoteResults] = useState<{
+    choice1: number;
+    choice2: number;
+    totalVotes: number;
   } | null>(null);
 
-  const generateNewCompliments = useCallback(() => {
-    if (options.length >= 2) {
-      // Shuffle and pick 2 random compliments
-      const shuffled = [...options].sort(() => Math.random() - 0.5);
-      const compliment1 = shuffled[0];
-      const compliment2 = shuffled[1];
-      
-      setRandomCompliments({
-        compliment1: { text: compliment1.compliments!.person1, id: compliment1.id },
-        compliment2: { text: compliment2.compliments!.person1, id: compliment2.id }
-      });
-    }
-  }, [options]);
-
-  // Only generate compliments once when component mounts or when options change from 0 to >=2
   useEffect(() => {
-    if (options.length >= 2 && !randomCompliments) {
-      generateNewCompliments();
-    }
-  }, [options.length, randomCompliments, generateNewCompliments]);
+    // Connect to socket when component mounts
+    socketService.connect();
 
-  const castVote = (complimentId: string) => {
-    setConvos((prev) =>
-      prev.map((c) => {
-        if (c.id !== complimentId) return c;
-        const v = c.votes ?? { p1: 0, p2: 0 };
-        return { ...c, votes: { ...v, p1: v.p1 + 1 } } as Conversation;
-      })
-    );
+    // Listen for voting data
+    socketService.onVotingData((data) => {
+      setVotingPairs(data);
+      if (data.length > 0) {
+        setCurrentPair(data[0]);
+        // Get initial vote results (blurred)
+        socketService.getVoteResults(data[0].id, false);
+      }
+    });
+
+    // Listen for vote results
+    socketService.onVoteResults((data) => {
+      setVoteResults({
+        choice1: data.percentages.choice1,
+        choice2: data.percentages.choice2,
+        totalVotes: data.totalVotes
+      });
+      if (data.hasVoted) {
+        setHasVoted(true);
+      }
+    });
+
+    // Request voting data when component mounts
+    socketService.getVotingData();
+
+    return () => {
+      socketService.removeAllListeners();
+    };
+  }, []);
+
+  const castVote = (choice: 1 | 2) => {
+    if (!currentPair || hasVoted) return;
     
-    // Don't automatically generate new compliments - let user choose when to get new ones
+    // Submit vote via socket
+    socketService.submitVote(currentPair.id, choice, socketService.connect().id || 'anonymous');
+    setHasVoted(true);
   };
 
-  if (!randomCompliments || options.length < 2) {
+  const getNewPair = () => {
+    if (votingPairs.length > 1) {
+      const randomIndex = Math.floor(Math.random() * (votingPairs.length - 1));
+      const newPair = votingPairs[randomIndex];
+      setCurrentPair(newPair);
+      setHasVoted(false);
+      setVoteResults(null);
+      // Get blurred results for new pair
+      socketService.getVoteResults(newPair.id, false);
+    }
+  };
+
+  if (!currentPair || votingPairs.length === 0) {
     return (
       <div className="p-6 rounded-2xl bg-white shadow-sm border">
         <h2 className="text-lg font-semibold mb-2">
-          {options.length < 2 ? "Need more conversations to vote" : "Loading compliments..."}
+          {votingPairs.length === 0 ? "No conversations available to vote on" : "Loading conversations..."}
         </h2>
         <p className="text-sm text-gray-600 mb-4">
-          {options.length < 2 
-            ? "You need at least 2 completed conversations to start voting." 
-            : "Preparing random compliments for you to vote on."}
+          {votingPairs.length === 0 
+            ? "No completed conversations are available for voting yet. Start some conversations to see voting options!" 
+            : "Preparing conversations for you to vote on."}
         </p>
         <div className="flex gap-2">
           <button
@@ -955,12 +1159,10 @@ function Vote({
     );
   }
 
-  // Calculate stats for the current pair
-  const compliment1Votes = options.find(c => c.id === randomCompliments.compliment1.id)?.votes?.p1 ?? 0;
-  const compliment2Votes = options.find(c => c.id === randomCompliments.compliment2.id)?.votes?.p1 ?? 0;
-  const totalPairVotes = compliment1Votes + compliment2Votes;
-  const compliment1Percentage = totalPairVotes > 0 ? Math.round((compliment1Votes / totalPairVotes) * 100) : 0;
-  const compliment2Percentage = totalPairVotes > 0 ? Math.round((compliment2Votes / totalPairVotes) * 100) : 0;
+  // Get compliments from the current voting pair
+  const compliments = Object.values(currentPair.compliments);
+  const compliment1 = compliments[0] || "";
+  const compliment2 = compliments[1] || "";
 
   return (
     <div className="grid gap-4 md:grid-cols-3">
@@ -970,7 +1172,7 @@ function Vote({
             Vote: Which compliment is better?
           </h2>
           <button
-            onClick={generateNewCompliments}
+            onClick={getNewPair}
             className="px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-sm font-medium transition-colors"
           >
             🔄 New Pair
@@ -980,34 +1182,38 @@ function Vote({
         <div className="space-y-4">
           <ComplimentCard
             label="Compliment A"
-            text={randomCompliments.compliment1.text}
-            onVote={() => castVote(randomCompliments.compliment1.id)}
+            text={compliment1}
+            onVote={() => castVote(1)}
+            disabled={hasVoted}
           />
           <ComplimentCard
             label="Compliment B"
-            text={randomCompliments.compliment2.text}
-            onVote={() => castVote(randomCompliments.compliment2.id)}
+            text={compliment2}
+            onVote={() => castVote(2)}
+            disabled={hasVoted}
           />
         </div>
 
         {/* Vote Statistics */}
-        {totalPairVotes > 0 && (
+        {voteResults && (
           <div className="mt-6 p-4 rounded-xl bg-gray-50 border">
             <h3 className="text-sm font-semibold mb-3">Vote Results</h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="text-center">
-                <div className="text-lg font-bold text-blue-600">{compliment1Percentage}%</div>
+                <div className={`text-lg font-bold ${hasVoted ? 'text-blue-600' : 'text-gray-400 blur-sm'}`}>
+                  {hasVoted ? `${voteResults.choice1}%` : '???'}
+                </div>
                 <div className="text-xs text-gray-600">Compliment A</div>
-                <div className="text-xs text-gray-500">({compliment1Votes} votes)</div>
               </div>
               <div className="text-center">
-                <div className="text-lg font-bold text-purple-600">{compliment2Percentage}%</div>
+                <div className={`text-lg font-bold ${hasVoted ? 'text-purple-600' : 'text-gray-400 blur-sm'}`}>
+                  {hasVoted ? `${voteResults.choice2}%` : '???'}
+                </div>
                 <div className="text-xs text-gray-600">Compliment B</div>
-                <div className="text-xs text-gray-500">({compliment2Votes} votes)</div>
               </div>
             </div>
             <div className="mt-3 text-center text-xs text-gray-500">
-              Total votes: {totalPairVotes}
+              {hasVoted ? `Total votes: ${voteResults.totalVotes}` : 'Vote to see results!'}
             </div>
           </div>
         )}
@@ -1027,19 +1233,17 @@ function Vote({
             <h3 className="font-semibold mb-3 text-center">Voting Stats</h3>
             <div className="space-y-3 text-sm">
               <div className="text-gray-600">
-                <div className="font-medium">Total Conversations:</div>
-                <div className="text-lg font-bold text-blue-600">{options.length}</div>
+                <div className="font-medium">Available Pairs:</div>
+                <div className="text-lg font-bold text-blue-600">{votingPairs.length}</div>
               </div>
               <div className="text-gray-600">
-                <div className="font-medium">Total Votes Cast:</div>
-                <div className="text-lg font-bold text-purple-600">{options.reduce((sum, c) => sum + (c.votes?.p1 ?? 0), 0)}</div>
+                <div className="font-medium">Total Votes:</div>
+                <div className="text-lg font-bold text-purple-600">{voteResults?.totalVotes || 0}</div>
               </div>
               <div className="text-gray-600">
-                <div className="font-medium">Average Rating:</div>
+                <div className="font-medium">Current Vote:</div>
                 <div className="text-lg font-bold text-green-600">
-                  {options.length > 0 
-                    ? Math.round((options.reduce((sum, c) => sum + (c.votes?.p1 ?? 0), 0) / options.length) * 10) / 10
-                    : 0}/10
+                  {hasVoted ? 'Voted' : 'Pending'}
                 </div>
               </div>
             </div>
@@ -1054,10 +1258,12 @@ function ComplimentCard({
   label,
   text,
   onVote,
+  disabled = false,
 }: {
   label: string;
   text: string;
   onVote: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="p-4 rounded-2xl border bg-white flex items-start gap-3">
@@ -1070,9 +1276,14 @@ function ComplimentCard({
       </div>
       <button
         onClick={onVote}
-        className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-sm"
+        disabled={disabled}
+        className={`px-3 py-1.5 rounded-xl text-sm transition-colors ${
+          disabled 
+            ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
+            : 'bg-gray-100 hover:bg-gray-200 text-gray-900'
+        }`}
       >
-        Vote
+        {disabled ? 'Voted' : 'Vote'}
       </button>
     </div>
   );
