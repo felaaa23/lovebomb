@@ -1,0 +1,1098 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { generateChatResponse, generateCompliment, type ChatMessage } from "./openai";
+
+// --- Types ---
+type Message = {
+  id: string;
+  author: "You" | "Stranger";
+  text: string;
+  ts: number;
+};
+
+type ChatBotState = {
+  isEnabled: boolean;
+  conversationHistory: ChatMessage[];
+};
+
+type Conversation = {
+  id: string;
+  createdAt: number;
+  messages: Message[];
+  compliments?: { person1: string; person2: string };
+  votes?: { p1: number; p2: number };
+};
+
+// --- Utils ---
+const uid = () => Math.random().toString(36).slice(2, 10);
+const fmtTime = (s: number) =>
+  `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+const STORAGE_KEY = "compliment-chat-convos-v1";
+
+function useLocalStore<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as T) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  }, [key, value]);
+  return [value, setValue] as const;
+}
+
+// --- App Shell ---
+export default function App() {
+  const [route, setRoute] = useState<"home" | "chat" | "vote" | "stats">(
+    "home"
+  );
+  const [convos, setConvos] = useLocalStore<Conversation[]>(STORAGE_KEY, []);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [chatBotState, setChatBotState] = useState<ChatBotState>({
+    isEnabled: false,
+    conversationHistory: []
+  });
+
+  const activeConvo = useMemo(
+    () => convos.find((c) => c.id === activeId) || null,
+    [convos, activeId]
+  );
+
+  const goHome = () => setRoute("home");
+  const startChat = () => {
+    const convo: Conversation = {
+      id: uid(),
+      createdAt: Date.now(),
+      messages: [],
+    };
+    setConvos((prev) => [convo, ...prev]);
+    setActiveId(convo.id);
+    setRoute("chat");
+  };
+
+  const goVote = (id?: string) => {
+    if (id) setActiveId(id);
+    setRoute("vote");
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 text-white">
+      <nav className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50 shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-xl flex items-center justify-center shadow-lg">
+              <span className="text-white font-bold text-lg">C</span>
+            </div>
+            <span className="text-xl font-bold text-white">Compliment Chat</span>
+          </div>
+          
+          <div className="flex items-center gap-3 ml-12">
+            <button
+              onClick={() => setRoute("home")}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                route === "home" 
+                  ? "bg-blue-600 text-white shadow-lg" 
+                  : "text-gray-300 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              Home
+            </button>
+            <button
+              onClick={startChat}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-blue-600 to-cyan-500 text-white hover:shadow-lg transition-all duration-200 hover:scale-105"
+            >
+              Start Chat
+            </button>
+            <button
+              onClick={() => setRoute("vote")}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                route === "vote" 
+                  ? "bg-blue-600 text-white shadow-lg" 
+                  : "text-gray-300 hover:text-white hover:bg-slate-800/50"
+              }`}
+            >
+              Vote
+            </button>
+          </div>
+          
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={() => setChatBotState(prev => ({ ...prev, isEnabled: !prev.isEnabled }))}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                chatBotState.isEnabled 
+                  ? "bg-green-600 text-white shadow-lg" 
+                  : "bg-slate-700 text-gray-300 hover:text-white"
+              }`}
+            >
+              {chatBotState.isEnabled ? "🤖 AI On" : "🤖 AI Off"}
+            </button>
+            <button
+              onClick={() => setRoute("stats")}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-gray-300 hover:text-white hover:bg-slate-800/50 transition-all duration-200"
+            >
+              Stats
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <main className="max-w-6xl mx-auto p-6">
+        {route === "home" && (
+          <Home onStart={startChat} onVote={() => setRoute("vote")} />
+        )}
+        {route === "chat" && activeConvo && (
+          <Chat
+            convo={activeConvo}
+            updateConvo={(c) =>
+              setConvos((prev) => prev.map((x) => (x.id === c.id ? c : x)))
+            }
+            onFinish={() => setRoute("vote")}
+            chatBotState={chatBotState}
+            setChatBotState={setChatBotState}
+          />
+        )}
+        {route === "vote" && (
+          <Vote
+            convos={convos}
+            activeId={activeId || (convos[0]?.id ?? null)}
+            setActiveId={setActiveId}
+            setConvos={setConvos}
+            onStartNew={startChat}
+            onHome={goHome}
+          />
+        )}
+        {route === "stats" && <Stats convos={convos} onVote={goVote} />}
+      </main>
+
+      <footer className="py-8 text-center">
+        <div className="inline-flex items-center gap-3 px-6 py-3 rounded-xl bg-slate-800/80 backdrop-blur-sm border border-slate-700/50 shadow-lg">
+          <div className="w-6 h-6 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-lg flex items-center justify-center">
+            <span className="text-white text-xs font-bold">C</span>
+          </div>
+          <span className="text-sm font-medium text-gray-300">
+            © {new Date().getFullYear()} Compliment Chat • Spread Kindness
+          </span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// --- Pages ---
+function Home({
+  onStart,
+  onVote,
+}: {
+  onStart: () => void;
+  onVote: () => void;
+}) {
+  return (
+    <div className="space-y-12">
+      {/* Hero Section */}
+      <div className="text-center py-20">
+        <div className="inline-flex items-center gap-4 mb-12">
+          <div className="w-20 h-20 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-2xl flex items-center justify-center shadow-2xl">
+            <span className="text-4xl">💬</span>
+          </div>
+          <h1 className="text-6xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+            Compliment Chat
+          </h1>
+        </div>
+        <p className="text-2xl text-gray-300 max-w-4xl mx-auto leading-relaxed mb-12">
+          Connect with strangers, share genuine compliments, and discover what makes conversations meaningful. 
+          Start a 1-minute chat and let kindness win!
+        </p>
+        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-900/30 border border-green-700/50 text-green-300 text-sm font-medium">
+          <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+          CJIS Equivalent Security
+        </div>
+      </div>
+
+      {/* Action Buttons Section */}
+      <div className="flex flex-col sm:flex-row gap-6 justify-center items-center mb-24">
+        <div className="p-6 rounded-2xl bg-slate-800/80 backdrop-blur-sm shadow-xl border border-slate-700/50 hover:shadow-2xl transition-all duration-300 hover:scale-105">
+          <button
+            onClick={onStart}
+            className="px-8 py-4 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-3"
+          >
+            <span className="text-xl">💬</span>
+            Start 1-minute Chat
+          </button>
+        </div>
+        
+        <div className="p-6 rounded-2xl bg-slate-800/80 backdrop-blur-sm shadow-xl border border-slate-700/50 hover:shadow-2xl transition-all duration-300 hover:scale-105">
+          <button
+            onClick={onVote}
+            className="px-8 py-4 rounded-xl bg-slate-700 text-gray-300 font-semibold hover:bg-slate-600 hover:text-white transition-all duration-200 hover:scale-105 flex items-center gap-3"
+          >
+            <span className="text-xl">🗳️</span>
+            Vote on Conversations
+          </button>
+        </div>
+      </div>
+
+      {/* Features Section with Fade-in Animation */}
+      <div className="space-y-16 mb-24">
+        <div className="text-center opacity-0 animate-fade-in-up">
+          <h2 className="text-4xl font-bold text-white mb-6">Why Compliment Chat?</h2>
+          <p className="text-xl text-gray-300 max-w-3xl mx-auto leading-relaxed">
+            In just 60 seconds, you can make a real connection and spread positivity through genuine compliments.
+          </p>
+        </div>
+
+        <div className="grid gap-12 md:grid-cols-3 opacity-0 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+          <div className="text-center p-8 rounded-3xl bg-slate-800/60 backdrop-blur-sm border border-slate-700/30 hover:bg-slate-800/80 transition-all duration-300">
+            <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-2xl flex items-center justify-center mb-6 shadow-lg mx-auto">
+              <span className="text-3xl">⏱️</span>
+            </div>
+            <h3 className="text-xl font-bold text-white mb-4">Quick & Focused</h3>
+            <p className="text-gray-300 leading-relaxed">Just 1 minute to make a meaningful connection and share kindness with someone new.</p>
+          </div>
+          
+          <div className="text-center p-8 rounded-3xl bg-slate-800/60 backdrop-blur-sm border border-slate-700/30 hover:bg-slate-800/80 transition-all duration-300">
+            <div className="w-16 h-16 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-2xl flex items-center justify-center mb-6 shadow-lg mx-auto">
+              <span className="text-3xl">💝</span>
+            </div>
+            <h3 className="text-xl font-bold text-white mb-4">Spread Positivity</h3>
+            <p className="text-gray-300 leading-relaxed">Every conversation ends with genuine compliments that brighten someone's day and create lasting positive memories.</p>
+          </div>
+          
+          <div className="text-center p-8 rounded-3xl bg-slate-800/60 backdrop-blur-sm border border-slate-700/30 hover:bg-slate-800/80 transition-all duration-300">
+            <div className="w-16 h-16 bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl flex items-center justify-center mb-6 shadow-lg mx-auto">
+              <span className="text-3xl">📊</span>
+            </div>
+            <h3 className="text-xl font-bold text-white mb-4">Community Voting</h3>
+            <p className="text-gray-300 leading-relaxed">See which compliments resonate most with the community through live voting and discover what makes conversations special.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Chat({
+  convo,
+  updateConvo,
+  onFinish,
+  chatBotState,
+  setChatBotState,
+}: {
+  convo: Conversation;
+  updateConvo: (c: Conversation) => void;
+  onFinish: () => void;
+  chatBotState: ChatBotState;
+  setChatBotState: React.Dispatch<React.SetStateAction<ChatBotState>>;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(60);
+  const [input, setInput] = useState("");
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const [phase, setPhase] = useState<"chat" | "compliments">("chat");
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [selectedLocation, setSelectedLocation] = useState("Global");
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
+
+  useEffect(() => {
+    if (phase !== "chat") return;
+    if (secondsLeft <= 0) {
+      setPhase("compliments");
+      return;
+    }
+    const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secondsLeft, phase]);
+
+  // Auto-scroll only if user hasn't manually scrolled up
+  useEffect(() => {
+    if (!userScrolledUp) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  });
+
+  // Track user scroll behavior
+  useEffect(() => {
+    const chatContainer = chatContainerRef.current;
+    if (!chatContainer) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = chatContainer;
+      const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10; // 10px threshold
+      setUserScrolledUp(!isAtBottom);
+    };
+
+    chatContainer.addEventListener('scroll', handleScroll);
+    return () => chatContainer.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const send = async (author: Message["author"]) => {
+    if (!input.trim()) return;
+    const m: Message = {
+      id: uid(),
+      author,
+      text: input.trim(),
+      ts: Date.now(),
+    };
+    updateConvo({ ...convo, messages: [...convo.messages, m] });
+    
+    // Reset scroll behavior when user sends a message
+    setUserScrolledUp(false);
+    
+    // Update chatbot conversation history
+    if (author === "You") {
+      const newHistory = [...chatBotState.conversationHistory, 
+        { role: 'user' as const, content: input.trim() }
+      ];
+      setChatBotState(prev => ({ ...prev, conversationHistory: newHistory }));
+    }
+    
+    setInput("");
+    
+    // If AI is enabled and user sent a message, generate AI response
+    if (chatBotState.isEnabled && author === "You") {
+      try {
+        const aiResponse = await generateChatResponse(
+          chatBotState.conversationHistory, 
+          input.trim()
+        );
+        
+        const aiMessage: Message = {
+          id: uid(),
+          author: "Stranger",
+          text: aiResponse,
+          ts: Date.now(),
+        };
+        
+        // Add AI response to conversation
+        updateConvo({ ...convo, messages: [...convo.messages, m, aiMessage] });
+        
+        // Update chatbot conversation history with AI response
+        const updatedHistory = [...chatBotState.conversationHistory, 
+          { role: 'user' as const, content: input.trim() },
+          { role: 'assistant' as const, content: aiResponse }
+        ];
+        setChatBotState(prev => ({ ...prev, conversationHistory: updatedHistory }));
+      } catch (error) {
+        console.error('Error generating AI response:', error);
+        // Fallback to manual simulation if AI fails
+      }
+    }
+  };
+
+  const saveCompliments = async () => {
+    const trimmedP1 = p1.trim();
+    const trimmedP2 = p2.trim();
+    
+    // If AI is enabled and compliments are empty, generate them
+    if (chatBotState.isEnabled && (!trimmedP1 || !trimmedP2)) {
+      try {
+        const aiCompliments = await generateCompliment(chatBotState.conversationHistory);
+        const updated: Conversation = {
+          ...convo,
+          compliments: aiCompliments,
+          votes: convo.votes ?? { p1: 0, p2: 0 },
+        };
+        updateConvo(updated);
+        onFinish();
+        return;
+      } catch (error) {
+        console.error('Error generating AI compliments:', error);
+      }
+    }
+    
+    // Use manual compliments if provided
+    if (!trimmedP1 || !trimmedP2) return;
+    const updated: Conversation = {
+      ...convo,
+      compliments: { person1: trimmedP1, person2: trimmedP2 },
+      votes: convo.votes ?? { p1: 0, p2: 0 },
+    };
+    updateConvo(updated);
+    onFinish();
+  };
+
+  return (
+    <div className="grid gap-6 md:grid-cols-3">
+      <div className="md:col-span-2 p-6 rounded-3xl bg-slate-800/80 backdrop-blur-sm shadow-xl border border-slate-700/50 min-h-[70vh] flex flex-col">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-xl flex items-center justify-center shadow-lg">
+              <span className="text-xl">💬</span>
+            </div>
+            <h2 className="text-2xl font-bold text-white">Live Chat</h2>
+            {chatBotState.isEnabled && (
+              <div className="px-2 py-1 rounded-lg bg-green-600 text-white text-xs font-medium">
+                🤖 AI Enabled
+              </div>
+            )}
+          </div>
+          <div className={`px-4 py-2 rounded-2xl text-sm font-semibold shadow-lg transition-all duration-300 ${
+            secondsLeft > 20 
+              ? "bg-gradient-to-r from-blue-500 to-cyan-400 text-white" 
+              : secondsLeft > 10 
+                ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+                : "bg-gradient-to-r from-red-500 to-pink-500 text-white animate-pulse"
+          }`}>
+            ⏱️ {fmtTime(secondsLeft)}
+          </div>
+        </div>
+        <div ref={chatContainerRef} className="flex-1 overflow-auto space-y-4 pr-2 scrollbar-thin scrollbar-thumb-slate-600">
+          {convo.messages.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-gradient-to-r from-slate-600 to-slate-700 rounded-full flex items-center justify-center mb-4 mx-auto">
+                  <span className="text-2xl">💭</span>
+                </div>
+                <p className="text-gray-300 font-medium">Start the conversation!</p>
+                <p className="text-sm text-gray-400">Type a message below to begin</p>
+                {chatBotState.isEnabled && (
+                  <p className="text-xs text-green-400 mt-2">🤖 AI will respond automatically</p>
+                )}
+              </div>
+            </div>
+          )}
+          {convo.messages.map((m) => (
+            <div key={m.id} className={`flex ${m.author === "You" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[80%] px-4 py-3 shadow-lg transition-all duration-200 hover:scale-105 ${
+                m.author === "You"
+                  ? "bg-gradient-to-r from-blue-600 to-cyan-500 text-white rounded-3xl rounded-br-md"
+                  : "bg-slate-700 border border-slate-600 text-white rounded-3xl rounded-bl-md"
+              }`}>
+                <div className={`text-xs mb-2 font-medium ${
+                  m.author === "You" ? "text-blue-100" : "text-gray-400"
+                }`}>
+                  {m.author === "You" ? "You" : chatBotState.isEnabled ? "🤖 AI Stranger" : "👤 Stranger"}
+                </div>
+                <div className="text-sm leading-relaxed">{m.text}</div>
+              </div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+        {phase === "chat" ? (
+          <div className="mt-6 space-y-4">
+            {/* Location Selection */}
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-gray-300">📍 Chat Location:</label>
+              <select
+                value={selectedLocation}
+                onChange={(e) => setSelectedLocation(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-slate-700 border border-slate-600 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
+              >
+                <option value="Global">🌍 Global</option>
+                <option value="North America">🇺🇸 North America</option>
+                <option value="Europe">🇪🇺 Europe</option>
+                <option value="Asia">🇯🇵 Asia</option>
+                <option value="South America">🇧🇷 South America</option>
+                <option value="Africa">🇿🇦 Africa</option>
+                <option value="Oceania">🇦🇺 Oceania</option>
+              </select>
+            </div>
+            
+            <div className="flex gap-3">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send("You");
+                  }
+                }}
+                placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
+                className="flex-1 border-2 border-slate-600 rounded-2xl px-4 py-3 focus:outline-none focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 bg-slate-700/80 backdrop-blur-sm text-white placeholder-gray-400"
+              />
+            <button
+              onClick={() => send("You")}
+              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+            >
+              <span>📤</span>
+              Send
+            </button>
+            {!chatBotState.isEnabled && (
+              <button
+                onClick={() => {
+                  if (!input.trim()) return;
+                  const m: Message = {
+                    id: uid(),
+                    author: "Stranger",
+                    text: input.trim(),
+                    ts: Date.now(),
+                  };
+                  updateConvo({ ...convo, messages: [...convo.messages, m] });
+                  setInput("");
+                }}
+                className="px-6 py-3 rounded-2xl bg-gradient-to-r from-slate-600 to-slate-700 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+              >
+                <span>👤</span>
+                Simulate
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-6 space-y-6">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-gradient-to-r from-amber-500 to-orange-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-xl">
+                <span className="text-2xl">💝</span>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Time's Up! Share Your Compliments</h3>
+              <p className="text-gray-300">
+                {chatBotState.isEnabled 
+                  ? "AI will generate compliments based on your conversation, or enter them manually below" 
+                  : "Enter both compliments to complete the conversation"
+                }
+              </p>
+            </div>
+            
+            <div className="grid gap-4">
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-700/80 to-slate-600/80 border border-slate-600/50">
+                <label className="text-sm font-semibold text-blue-300 mb-2 block">
+                  👤 Person 1's Compliment
+                </label>
+                <textarea
+                  value={p1}
+                  onChange={(e) => setP1(e.target.value)}
+                  placeholder="e.g., You have a really thoughtful way of explaining things that made our conversation so engaging!"
+                  className="w-full border-2 border-slate-600 rounded-2xl px-4 py-3 focus:outline-none focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 bg-slate-700/80 backdrop-blur-sm resize-none text-white placeholder-gray-400"
+                  rows={3}
+                />
+              </div>
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-700/80 to-slate-600/80 border border-slate-600/50">
+                <label className="text-sm font-semibold text-cyan-300 mb-2 block">
+                  👤 Person 2's Compliment
+                </label>
+                <textarea
+                  value={p2}
+                  onChange={(e) => setP2(e.target.value)}
+                  placeholder="e.g., Your sense of humor and positive energy made this minute absolutely fly by!"
+                  className="w-full border-2 border-slate-600 rounded-2xl px-4 py-3 focus:outline-none focus:ring-4 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all duration-200 bg-slate-700/80 backdrop-blur-sm resize-none text-white placeholder-gray-400"
+                  rows={3}
+                />
+              </div>
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={saveCompliments}
+                className="flex-1 px-6 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2"
+              >
+                <span className="text-lg">💝</span>
+                {chatBotState.isEnabled ? "Save & Go to Vote" : "Save & Go to Vote"}
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-6 py-4 rounded-2xl bg-gradient-to-r from-slate-600 to-slate-700 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2"
+              >
+                <span className="text-lg">🔄</span>
+                Reset
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <aside className="p-6 rounded-3xl bg-slate-800/80 backdrop-blur-sm shadow-xl border border-slate-700/50 h-fit">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-cyan-400 rounded-xl flex items-center justify-center shadow-lg">
+            <span className="text-xl">📊</span>
+          </div>
+          <h3 className="text-xl font-bold text-white">Chat Details</h3>
+        </div>
+        <div className="space-y-4">
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-700/80 to-slate-600/80 border border-slate-600/50">
+            <div className="text-sm font-semibold text-gray-300 mb-1">Conversation ID</div>
+            <div className="text-xs text-gray-400 font-mono bg-slate-700 px-2 py-1 rounded-lg border border-slate-600">
+              {convo.id}
+            </div>
+          </div>
+          
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-900/50 to-cyan-900/50 border border-blue-700/50">
+            <div className="text-sm font-semibold text-blue-300 mb-1">Started</div>
+            <div className="text-sm text-blue-200">
+              {new Date(convo.createdAt).toLocaleString()}
+            </div>
+          </div>
+          
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-900/50 to-blue-900/50 border border-cyan-700/50">
+            <div className="text-sm font-semibold text-cyan-300 mb-1">Messages</div>
+            <div className="text-2xl font-bold text-cyan-200">{convo.messages.length}</div>
+          </div>
+          
+          <div className={`p-4 rounded-2xl border ${
+            convo.compliments 
+              ? "bg-gradient-to-r from-green-900/50 to-emerald-900/50 border-green-700/50" 
+              : "bg-gradient-to-r from-amber-900/50 to-orange-900/50 border-amber-700/50"
+          }`}>
+            <div className={`text-sm font-semibold mb-1 ${
+              convo.compliments ? "text-green-300" : "text-amber-300"
+            }`}>
+              Compliments
+            </div>
+            <div className={`text-sm ${
+              convo.compliments ? "text-green-200" : "text-amber-200"
+            }`}>
+              {convo.compliments ? "✅ Completed" : "⏳ Pending"}
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function Vote({
+  convos,
+  activeId,
+  setActiveId,
+  setConvos,
+  onStartNew,
+  onHome,
+}: {
+  convos: Conversation[];
+  activeId: string | null;
+  setActiveId: (id: string | null) => void;
+  setConvos: React.Dispatch<React.SetStateAction<Conversation[]>>;
+  onStartNew: () => void;
+  onHome: () => void;
+}) {
+  const options = convos.filter((c) => c.compliments);
+  const current = options.find((c) => c.id === activeId) || options[0] || null;
+
+  const index = current ? options.findIndex((c) => c.id === current.id) : -1;
+  const prev = () => {
+    if (!current) return;
+    const i = (index - 1 + options.length) % options.length;
+    setActiveId(options[i].id);
+  };
+  const next = () => {
+    if (!current) return;
+    const i = (index + 1) % options.length;
+    setActiveId(options[i].id);
+  };
+
+  const castVote = (who: "p1" | "p2") => {
+    if (!current) return;
+    setConvos((prev) =>
+      prev.map((c) => {
+        if (c.id !== current.id) return c;
+        const v = c.votes ?? { p1: 0, p2: 0 };
+        return { ...c, votes: { ...v, [who]: v[who] + 1 } } as Conversation;
+      })
+    );
+  };
+
+  const pct = (n: number, d: number) =>
+    d === 0 ? 0 : Math.round((n / d) * 100);
+
+  if (!current) {
+    return (
+      <div className="text-center py-16">
+        <div className="w-24 h-24 bg-gradient-to-r from-gray-200 to-gray-300 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl">
+          <span className="text-4xl">🗳️</span>
+        </div>
+        <h2 className="text-3xl font-bold text-gray-800 mb-4">
+          No conversations to vote on yet
+        </h2>
+        <p className="text-lg text-gray-600 mb-8 max-w-md mx-auto">
+          Finish a chat and add compliments to unlock the voting experience. 
+          Start spreading kindness!
+        </p>
+        <div className="flex gap-4 justify-center">
+          <button
+            onClick={onStartNew}
+            className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+          >
+            <span className="text-lg">💬</span>
+            Start a New Chat
+          </button>
+          <button
+            onClick={onHome}
+            className="px-8 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+          >
+            <span className="text-lg">🏠</span>
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const totalVotes = (current.votes?.p1 ?? 0) + (current.votes?.p2 ?? 0);
+  const p1Pct = pct(current.votes?.p1 ?? 0, totalVotes);
+  const p2Pct = pct(current.votes?.p2 ?? 0, totalVotes);
+
+  return (
+    <div className="grid gap-6 md:grid-cols-3">
+      <div className="md:col-span-2 p-8 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20">
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-2xl">🗳️</span>
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800">
+                Vote: Which compliment is better?
+              </h2>
+              <p className="text-gray-600">Help the community decide which compliment resonates most</p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={prev}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-gray-400 to-gray-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+            >
+              <span>⬅️</span>
+              Prev
+            </button>
+            <button
+              onClick={next}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-gray-400 to-gray-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+            >
+              Next
+              <span>➡️</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-6 mb-8">
+          <ComplimentCard
+            label="Person 1"
+            text={current.compliments!.person1}
+            onVote={() => castVote("p1")}
+          />
+          <ComplimentCard
+            label="Person 2"
+            text={current.compliments!.person2}
+            onVote={() => castVote("p2")}
+          />
+        </div>
+
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full flex items-center justify-center">
+              <span className="text-white text-sm">📊</span>
+            </div>
+            <h3 className="text-lg font-bold text-gray-800">Live Results</h3>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 border border-gray-200">
+            <div className="h-4 w-full bg-gradient-to-r from-gray-200 to-gray-300 rounded-full overflow-hidden shadow-inner">
+              <div
+                className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-500 ease-out"
+                style={{ width: `${p1Pct}%` }}
+              />
+            </div>
+            <div className="mt-4 flex justify-between text-sm font-semibold">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full"></div>
+                <span className="text-indigo-700">
+                  Person 1: {p1Pct}% ({current.votes?.p1 ?? 0})
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full"></div>
+                <span className="text-emerald-700">
+                  Person 2: {p2Pct}% ({current.votes?.p2 ?? 0})
+                </span>
+              </div>
+            </div>
+            <div className="text-center mt-3 text-xs text-gray-500">
+              Total Votes: {totalVotes}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-4">
+          <button
+            onClick={onStartNew}
+            className="flex-1 px-6 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2"
+          >
+            <span className="text-lg">💬</span>
+            Start New Conversation
+          </button>
+          <button
+            onClick={onHome}
+            className="px-6 py-4 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2"
+          >
+            <span className="text-lg">🏠</span>
+            Back to Home
+          </button>
+        </div>
+      </div>
+
+      <aside className="p-6 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20 h-fit">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
+            <span className="text-xl">📋</span>
+          </div>
+          <h3 className="text-xl font-bold text-gray-800">Conversations</h3>
+        </div>
+        <div className="space-y-3 max-h-[60vh] overflow-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300">
+          {options.map((c) => {
+            const tv = (c.votes?.p1 ?? 0) + (c.votes?.p2 ?? 0);
+            const pct1 = tv ? Math.round(((c.votes?.p1 ?? 0) / tv) * 100) : 0;
+            return (
+              <button
+                key={c.id}
+                onClick={() => setActiveId(c.id)}
+                className={`w-full text-left p-4 rounded-2xl border-2 transition-all duration-200 ${
+                  c.id === current.id
+                    ? "bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-300 shadow-lg"
+                    : "bg-white/80 hover:bg-gradient-to-r hover:from-gray-50 hover:to-gray-100 border-gray-200 hover:border-gray-300 hover:shadow-md"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold text-gray-800">
+                    {new Date(c.createdAt).toLocaleDateString()}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(c.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-gray-600">
+                    {tv} votes
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full"></div>
+                    <span className="text-xs font-semibold text-indigo-600">
+                      P1: {pct1}%
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-300"
+                    style={{ width: `${pct1}%` }}
+                  />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ComplimentCard({
+  label,
+  text,
+  onVote,
+}: {
+  label: string;
+  text: string;
+  onVote: () => void;
+}) {
+  const isPerson1 = label.includes("1");
+  return (
+    <div className={`p-6 rounded-3xl border-2 shadow-lg transition-all duration-200 hover:shadow-xl hover:scale-105 ${
+      isPerson1 
+        ? "bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-200" 
+        : "bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200"
+    }`}>
+      <div className="flex items-start gap-4">
+        <div className={`h-12 w-12 rounded-2xl flex items-center justify-center text-lg font-bold shadow-lg ${
+          isPerson1 
+            ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white" 
+            : "bg-gradient-to-r from-emerald-500 to-teal-600 text-white"
+        }`}>
+          {label.split(" ")[1] || label[0]}
+        </div>
+        <div className="flex-1">
+          <div className={`text-lg font-bold mb-2 ${
+            isPerson1 ? "text-indigo-800" : "text-emerald-800"
+          }`}>
+            {label}
+          </div>
+          <div className="text-gray-700 leading-relaxed mb-4 bg-white/80 backdrop-blur-sm p-4 rounded-2xl border border-white/50">
+            "{text}"
+          </div>
+        </div>
+        <button
+          onClick={onVote}
+          className={`px-6 py-3 rounded-2xl font-semibold shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2 ${
+            isPerson1 
+              ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:shadow-xl" 
+              : "bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:shadow-xl"
+          }`}
+        >
+          <span className="text-lg">👍</span>
+          Vote
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Stats({
+  convos,
+  onVote,
+}: {
+  convos: Conversation[];
+  onVote: (id: string) => void;
+}) {
+  const mine = convos.filter((c) => c.compliments);
+  if (mine.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <div className="w-24 h-24 bg-gradient-to-r from-gray-200 to-gray-300 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl">
+          <span className="text-4xl">📊</span>
+        </div>
+        <h2 className="text-3xl font-bold text-gray-800 mb-4">
+          No stats yet
+        </h2>
+        <p className="text-lg text-gray-600 max-w-md mx-auto">
+          Finish a chat and add compliments to see how people vote on your conversations. 
+          Track your performance and see which compliments resonate most!
+        </p>
+      </div>
+    );
+  }
+
+  const totalVotes = mine.reduce((sum, c) => sum + (c.votes?.p1 ?? 0) + (c.votes?.p2 ?? 0), 0);
+  const avgP1Win = mine.length > 0 ? Math.round(mine.reduce((sum, c) => {
+    const tv = (c.votes?.p1 ?? 0) + (c.votes?.p2 ?? 0);
+    return sum + (tv ? Math.round(((c.votes?.p1 ?? 0) / tv) * 100) : 0);
+  }, 0) / mine.length) : 0;
+
+  return (
+    <div className="space-y-8">
+      {/* Stats Overview */}
+      <div className="grid gap-6 md:grid-cols-3">
+        <div className="p-6 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-2xl">💬</span>
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Total Chats</h3>
+              <p className="text-sm text-gray-600">Completed conversations</p>
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-blue-600">{mine.length}</div>
+        </div>
+
+        <div className="p-6 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-2xl">🗳️</span>
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Total Votes</h3>
+              <p className="text-sm text-gray-600">Community engagement</p>
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-green-600">{totalVotes}</div>
+        </div>
+
+        <div className="p-6 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-2xl">⭐</span>
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Avg P1 Win</h3>
+              <p className="text-sm text-gray-600">Person 1 performance</p>
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-purple-600">{avgP1Win}%</div>
+        </div>
+      </div>
+
+      {/* Individual Conversations */}
+      <div className="space-y-6">
+        <h2 className="text-2xl font-bold text-gray-800 mb-6">Your Conversations</h2>
+        {mine.map((c) => {
+          const tv = (c.votes?.p1 ?? 0) + (c.votes?.p2 ?? 0);
+          const p1 = tv ? Math.round(((c.votes?.p1 ?? 0) / tv) * 100) : 0;
+          const p2 = tv ? Math.round(((c.votes?.p2 ?? 0) / tv) * 100) : 0;
+          return (
+            <div key={c.id} className="p-6 rounded-3xl bg-white/70 backdrop-blur-sm shadow-xl border border-white/20">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
+                    <span className="text-xl">💬</span>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-800">
+                      {new Date(c.createdAt).toLocaleDateString()}
+                    </h3>
+                    <p className="text-sm text-gray-600">
+                      {new Date(c.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} • {tv} votes
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onVote(c.id)}
+                  className="px-4 py-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105 flex items-center gap-2"
+                >
+                  <span>🗳️</span>
+                  View Votes
+                </button>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                      1
+                    </div>
+                    <span className="font-semibold text-indigo-800">Person 1</span>
+                  </div>
+                  <p className="text-sm text-gray-700 bg-white/80 backdrop-blur-sm p-3 rounded-xl border border-white/50">
+                    "{c.compliments!.person1}"
+                  </p>
+                </div>
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
+                      2
+                    </div>
+                    <span className="font-semibold text-emerald-800">Person 2</span>
+                  </div>
+                  <p className="text-sm text-gray-700 bg-white/80 backdrop-blur-sm p-3 rounded-xl border border-white/50">
+                    "{c.compliments!.person2}"
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-gray-200">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-8 h-8 bg-gradient-to-r from-green-500 to-emerald-600 rounded-full flex items-center justify-center">
+                    <span className="text-white text-sm">📊</span>
+                  </div>
+                  <h4 className="font-semibold text-gray-800">Vote Results</h4>
+                </div>
+                <div className="h-4 w-full bg-gradient-to-r from-gray-200 to-gray-300 rounded-full overflow-hidden shadow-inner">
+                  <div
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-500 ease-out"
+                    style={{ width: `${p1}%` }}
+                  />
+                </div>
+                <div className="mt-3 flex justify-between text-sm font-semibold">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full"></div>
+                    <span className="text-indigo-700">
+                      Person 1: {p1}% ({c.votes?.p1 ?? 0})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full"></div>
+                    <span className="text-emerald-700">
+                      Person 2: {p2}% ({c.votes?.p2 ?? 0})
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
