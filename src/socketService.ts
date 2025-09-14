@@ -7,12 +7,19 @@ class SocketService {
   constructor() {
     // Use environment variable or default to localhost for development
     this.serverUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3001';
+    
+    // Log the server URL for debugging
+    console.log('Socket connecting to:', this.serverUrl);
   }
 
   connect(): Socket {
     if (!this.socket) {
       this.socket = io(this.serverUrl, {
-        transports: ['websocket', 'polling']
+        transports: ['polling', 'websocket'],
+        upgrade: true,
+        rememberUpgrade: false,
+        timeout: 20000,
+        forceNew: true
       });
 
       this.socket.on('connect', () => {
