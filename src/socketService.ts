@@ -50,11 +50,6 @@ class SocketService {
     this.socket?.on('queue-left', callback);
   }
 
-  // Global queue status (for all users)
-  onGlobalQueueStatus(callback: (data: { queueLength: number; totalOnline: number; timestamp: number }) => void) {
-    this.socket?.on('global-queue-status', callback);
-  }
-
   // Matching
   onMatched(callback: (data: { roomId: string; partnerId: string; startTime: number; duration: number }) => void) {
     this.socket?.on('matched', callback);
